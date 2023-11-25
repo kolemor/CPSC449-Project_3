@@ -103,7 +103,7 @@ logging.config.fileConfig(
 # gets available classes for a student
 @router.get("/students/{student_id}/classes", tags=["Student"])
 def get_available_classes(student_id: int, request: Request):
-
+    
     # User Authentication
     if request.headers.get("X-User"):
         current_user = int(request.headers.get("X-User"))
@@ -615,13 +615,20 @@ def get_instructor_enrollment(instructor_id: int, class_id: int, request: Reques
                     status_code=403, detail="Access forbidden, wrong user"
                 )
 
-    # @ Getting the user table resource and using it to retrieve the instructors id and classes
+    # @ BRIEF: Getting the user table resource and using it to retrieve the instructors id and classes
     user = get_table_resource(dynamodb, USER_TABLE)
+    classes = get_table_resource(dynamodb, CLASS_TABLE)
 
-    instructor_data = enrollment.get_user_item(instructor_id)
-    class_data = enrollment.get_class_item(class_id)
+    # Getting the instructor id
+    user_response = user.get_item(Key={"id": instructor_id})
+    instructor_data = user_response.get("Item")
 
-    # Following if statements check if both the instructor and class exist
+    # @BREIF: Getting the Instructor class
+    classes = get_table_resource(dynamodb, CLASS_TABLE)
+    class_response = classes.get_item(Key={"id": class_id})
+    class_data = class_response.get("Item")
+
+    # @BRIEF: Following if statements check if both the instructor and class exist
     if not instructor_data or not class_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -660,18 +667,24 @@ def get_instructor_enrollment(instructor_id: int, class_id: int, request: Reques
     if "Items" in enrolled_students and enrolled_students["Items"]:
         enrolled_data = enrolled_students["Items"][0].get("enrolled", [])
 
-        enrolled_list = [
-            {
-                "id": student_id,
-                "name": user.get_item(Key={"id": student_id}).get("Item")["name"],
-            }
-            for student_id in enrolled_data
-        ]
+        enrolled_list = []
+
+        # Matches student id with name and print it out
+        for student_id in enrolled_data:
+            response = user.get_item(Key={"id": student_id})
+            student_data = response.get("Item")
+
+            if student_data and "id" in student_data and "name" in student_data:
+                student_info = {
+                    "id": student_data["id"],
+                    "name": student_data["name"],
+                }
+            enrolled_list.append(student_info)
         return {"Enrolled": enrolled_list}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Class has no enrolled students",
+            detail="Class has no dropped students",
         )
 
 
@@ -700,9 +713,13 @@ def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
 
     # Getting the instructor id
     user = get_table_resource(dynamodb, USER_TABLE)
+    user_response = user.get_item(Key={"id": instructor_id})
+    instructor_data = user_response.get("Item")
 
-    instructor_data = enrollment.get_user_item(instructor_id)
-    class_data = enrollment.get_class_item(class_id)
+    # Getting the Instructor class
+    classes = get_table_resource(dynamodb, CLASS_TABLE)
+    class_response = classes.get_item(Key={"id": class_id})
+    class_data = class_response.get("Item")
 
     # checking if the instructor and class exists
     if not instructor_data or not class_data:
@@ -741,14 +758,22 @@ def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
     if "Items" in dropped_students and dropped_students["Items"]:
         dropped_data = dropped_students["Items"][0].get("dropped", [])
 
-        dropped_list = [
-            {
-                "id": student_id,
-                "name": user.get_item(Key={"id": student_id}).get("Item")["name"],
-            }
-            for student_id in dropped_data
-        ]
-        return {"Enrolled": dropped_list}
+        # Fetch user names for dropped students
+        dropped_student_names = []
+
+        for student_id in dropped_data:
+            response = user.get_item(Key={"id": student_id})
+            student_data = response.get("Item")
+
+            # Check if the user with the given ID exists
+            if student_data and "id" in student_data and "name" in student_data:
+                student_info = {
+                    "id": student_data["id"],
+                    "name": student_data["name"],
+                }
+            dropped_student_names.append(student_info)
+
+        return {"Dropped": dropped_student_names}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -757,10 +782,7 @@ def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
 
 
 # Instructor administratively drop students
-@router.post(
-    "/instructors/{instructor_id}/classes/{class_id}/students/{student_id}/drop",
-    tags=["Instructor"],
-)
+@router.post("/instructors/{instructor_id}/classes/{class_id}/students/{student_id}/drop",tags=["Instructor"])
 def instructor_drop_class(
     instructor_id: int, class_id: int, student_id: int, request: Request
 ):
@@ -784,9 +806,17 @@ def instructor_drop_class(
                     status_code=403, detail="Access forbidden, wrong user"
                 )
 
-    instructor_data = enrollment.get_user_item(instructor_id)
-    student_data = enrollment.get_user_item(student_id)
-    class_data = enrollment.get_class_item(class_id)
+    # Getting instructor id
+    user = get_table_resource(dynamodb, USER_TABLE)
+    user_response = user.get_item(Key={"id": instructor_id})
+    instructor_data = user_response.get("Item")
+
+    # Getting student id
+    student = get_table_resource(dynamodb, USER_TABLE)
+    user_response = student.get_item(
+        Key={"id": student_id}
+    )
+    student_data = user_response.get("Item")
 
     # checks if both student and instructor exist in db
     if not instructor_data or not student_data:
@@ -887,61 +917,64 @@ def create_class(class_data: Class_Registrar):
 
 # Remove a class
 @router.delete("/registrar/classes/{class_id}", tags=["Registrar"])
-def remove_class(class_id: int):
+def remove_class(class_id: int, db: sqlite3.Connection = Depends(get_db)):
 
-    # fetch the class data 
-    class_data = enrollment.get_class_item(class_id)
+    cursor = db.cursor()
 
-    # check if the class exists in the database
+    # Check if the class exists in the database
+    cursor.execute("SELECT * FROM class WHERE id = ?", (class_id,))
+    class_data = cursor.fetchone()
+
     if not class_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Class not found"
         )
-    
-    # fetch the enrollment table from the database
-    # delete the class
-    class_table = get_table_resource(dynamodb, CLASS_TABLE)
-    class_table.delete_item(
-        Key={
-            'id': class_id
-        }
-    )
+
+    # Delete the class from the database
+    cursor.execute("DELETE FROM class WHERE id = ?", (class_id,))
+    db.commit()
 
     return {"message": "Class removed successfully"}
 
 
 # Change the assigned instructor for a class
-@router.put("/registrar/classes/{class_id}/instructors/{instructor_id}", tags=["Registrar"])
-def change_instructor(class_id: int, instructor_id: int):
+@router.put(
+    "/registrar/classes/{class_id}/instructors/{instructor_id}", tags=["Registrar"]
+)
+def change_instructor(
+    class_id: int, instructor_id: int, db: sqlite3.Connection = Depends(get_db)
+):
+    cursor = db.cursor()
 
-    # fetch class data
-    class_data = enrollment.get_class_item(class_id)
+    cursor.execute("SELECT * FROM class WHERE id = ?", (class_id,))
+    class_data = cursor.fetchone()
 
-    # check if the class exists in the database
     if not class_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Class not found"
         )
 
-    # fetch instructor data
-    instructor_data = enrollment.get_user_item(instructor_id)
+    cursor.execute(
+        """
+        SELECT * FROM users
+        JOIN user_role ON users.uid = user_role.user_id
+        JOIN role ON user_role.role_id = role.rid
+        WHERE uid = ? AND role = ?
+        """,
+        (instructor_id, "instructor"),
+    )
+    instructor_data = cursor.fetchone()
 
-    # check if the instructor exists in the data
     if not instructor_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Instructor not found"
         )
 
-    # fetch the enrollment table from the database
-    # update the instructor to the new class 
-    class_table = get_table_resource(dynamodb, CLASS_TABLE)
-    class_table.update_item(
-        Key={
-            'id': class_id
-        },
-        UpdateExpression='SET instructor_id = :instructor_id',
-        ExpressionAttributeValues={':instructor_id': instructor_id}
+    cursor.execute(
+        "UPDATE instructor_class SET instructor_id = ? WHERE class_id = ?",
+        (instructor_id, class_id),
     )
+    db.commit()
 
     return {"message": "Instructor changed successfully"}
 
