@@ -28,16 +28,6 @@ class Class_Info(BaseModel):
     department: Department
     instructor: Instructor
 
-class Waitlist_Info(BaseModel):
-    id: int
-    name: str
-    course_code: str
-    section_number: int
-    max_enroll: int
-    department: str
-    instructor: Instructor
-    waitlist_total: int
-
 class Waitlist_Student(BaseModel):
     class_id: int
     waitlist_position: int
@@ -45,6 +35,10 @@ class Waitlist_Student(BaseModel):
 class Waitlist_Instructor(BaseModel):
     student: Student
     waitlist_position: int
+
+class Waitlist_Info(BaseModel):
+    class_id: int
+    students: List[Waitlist_Instructor]
 
 class Enrolled(BaseModel):
     student: Student

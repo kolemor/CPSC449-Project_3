@@ -1,6 +1,6 @@
 import logging
 
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 
 
 # Configure the logger
@@ -53,6 +53,7 @@ class Enrollment:
                     },
                 )
                 self.classes.wait_until_exists()
+                self.create_secondary_index(self.classes, 'id-index', 'id')
                 table = self.classes
             else:
                 self.users = self.dyn_resource.create_table(
@@ -69,6 +70,7 @@ class Enrollment:
                     },
                 )
                 self.users.wait_until_exists()
+                self.create_secondary_index(self.users, 'id-index', 'id')
                 table = self.users
         except ClientError as err:
             logger.error(
@@ -80,6 +82,48 @@ class Enrollment:
             raise
         else:
             return table
+    
+
+    def create_secondary_index(self, table, index_name, attribute_name):
+        """
+        Creates a global secondary index on the specified table.
+
+        :param table: The DynamoDB table object.
+        :param index_name: The name of the index to create.
+        :param attribute_name: The attribute to use as the index key.
+        """
+        try:
+            table.update(
+                AttributeDefinitions=[
+                    {'AttributeName': attribute_name, 'AttributeType': 'N'},
+                ],
+                GlobalSecondaryIndexUpdates=[
+                    {
+                        'Create': {
+                            'IndexName': index_name,
+                            'KeySchema': [
+                                {'AttributeName': attribute_name, 'KeyType': 'HASH'},
+                            ],
+                            'Projection': {
+                                'ProjectionType': 'ALL',
+                            },
+                            'ProvisionedThroughput': {
+                                'ReadCapacityUnits': 10,
+                                'WriteCapacityUnits': 10,
+                            },
+                        }
+                    },
+                ],
+            )
+            table.wait_until_exists()
+        except WaiterError as err:
+            logger.error(
+                "Couldn't create index %s on table %s. Here's why: %s",
+                index_name,
+                table.name,
+                err,
+            )
+            raise
     
 
     def delete_table(self, table_name):

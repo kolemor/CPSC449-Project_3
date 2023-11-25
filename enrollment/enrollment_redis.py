@@ -32,7 +32,7 @@ class Waitlist:
         r.zadd(class_waitlist_key.format(class_id), {student_id: new_placement})
 
         # Add class to student's waitlist with the new placement
-        r.hset(student_waitlists_key.format(student_id), class_id, new_placement)
+        r.zadd(student_waitlists_key.format(student_id), {class_id: new_placement})
 
 
     def remove_student_from_waitlists(student_id, class_id):
@@ -51,13 +51,13 @@ class Waitlist:
             r.zrem(class_waitlist_key.format(class_id), student_id)
 
             # Remove the class from the student's waitlists
-            r.hdel(student_waitlists_key.format(student_id), class_id)
+            r.zrem(student_waitlists_key.format(student_id), class_id)
 
             # Update the placement values for remaining students
             remaining_students = r.zrangebyscore(class_waitlist_key.format(class_id), student_placement + 1, '+inf', withscores=True)
             for other_student_id, other_placement in remaining_students:
                 r.zadd(class_waitlist_key.format(class_id), {other_student_id: other_placement - 1})
-                r.hset(student_waitlists_key.format(student_id), other_student_id, other_placement - 1)
+                r.zadd(student_waitlists_key.format(student_id), {other_student_id: other_placement - 1})
 
 
     def is_student_on_waitlist(student_id, class_id):
@@ -97,7 +97,7 @@ class Waitlist:
         student_waitlists = {}
         for key in keys:
             student_id = key.decode().split(":")[1]
-            waitlists = r.hgetall(key)
+            waitlists = r.zrange(key, 0, -1, withscores=True)
             student_waitlists[student_id] = waitlists
         return student_waitlists
 
@@ -109,26 +109,43 @@ class Waitlist:
         :param student_id: The integer id of a student.
         :return: The waitlist counter for the student.
         """
-        waitlists = r.hlen(student_waitlists_key.format(student_id))
+        waitlists = r.zcard(student_waitlists_key.format(student_id))
         return waitlists
+
+   
+    def get_class_waitlist(class_id):
+        """
+        Returns a dictionary of all students on the classes waitlist.
+
+        :param class_id: The integer id of a class.
+        :return: A dictionary of all waitlists the student is on, using the format: {class_id: placement}.
+        """
+        # Get the waitlist information for the student
+        waitlist_info_bytes = r.zrange(class_waitlist_key.format(class_id), 0, -1, withscores=True)
+
+        # Convert bytes to string and then to integer for placement values
+        waitlist_info = {
+            student_id.decode('utf-8'): int(placement) if placement.is_integer() else float(placement)
+            for student_id, placement in waitlist_info_bytes
+        }
+
+        return waitlist_info
     
 
     def get_student_waitlist(student_id):
         """
-        Returns an integer value of how many waitlists a student is currently on.
+        Returns a dictionary of all waitlists the student is on.
 
         :param student_id: The integer id of a student.
-        :return: A dictionary of all waitlists the student is on,
-        user the following format: {class_id: placement}.
+        :return: A dictionary of all waitlists the student is on, using the format: {class_id: placement}.
         """
         # Get the waitlist information for the student
-        waitlist_info_bytes = r.hgetall(student_waitlists_key.format(student_id))
+        waitlist_info_bytes = r.zrange(student_waitlists_key.format(student_id), 0, -1, withscores=True)
 
-        # Convert placement values to integers for better usability
+        # Convert bytes to string and then to integer for placement values
         waitlist_info = {
-            # int(class_id.decode('utf-8')): int(placement.decode('utf-8')) for class_id, placement in waitlist_info_bytes.items()
-                int(class_id.decode('utf-8')): float(placement.decode('utf-8')) if '.' in placement.decode('utf-8') else int(placement.decode('utf-8'))
-                for class_id, placement in waitlist_info_bytes.items()
-            }
+            class_id.decode('utf-8'): int(placement) if placement.is_integer() else float(placement)
+            for class_id, placement in waitlist_info_bytes
+        }
 
         return waitlist_info
