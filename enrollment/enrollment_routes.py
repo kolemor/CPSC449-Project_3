@@ -586,13 +586,14 @@ def get_instructor_enrollment(instructor_id: int, class_id: int, request: Reques
     if "Items" in enrolled_students and enrolled_students["Items"]:
         enrolled_data = enrolled_students["Items"][0].get("enrolled", [])
 
-        enrolled_list = [
-            {
-                "id": student_id,
-                "name": user.get_item(Key={"id": student_id}).get("Item")["name"],
-            }
-            for student_id in enrolled_data
-        ]
+        enrolled_list = []
+        for student_id in enrolled_data:
+            user_item = user.get_item(Key={"id": student_id})
+            if user_item and "Item" in user_item:
+                enrolled_list.append({
+                    "id": student_id,
+                    "name": user_item["Item"].get("name", "Unknown Name")
+                })
         return {"Enrolled": enrolled_list}
     else:
         raise HTTPException(
