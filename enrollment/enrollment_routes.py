@@ -675,6 +675,7 @@ def get_instructor_enrollment(instructor_id: int, class_id: int, request: Reques
 @router.get("/instructors/{instructor_id}/classes/{class_id}/drop", tags=["Instructor"])
 def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
 
+    # User Authentication
     if request.headers.get("X-User"):
         current_user = int(request.headers.get("X-User"))
 
@@ -753,14 +754,10 @@ def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
 
 
 # Instructor administratively drop students
-@router.post(
-    "/instructors/{instructor_id}/classes/{class_id}/students/{student_id}/drop",
-    tags=["Instructor"],
-)
-def instructor_drop_class(
-    instructor_id: int, class_id: int, student_id: int, request: Request
-):
+@router.post("/instructors/{instructor_id}/classes/{class_id}/students/{student_id}/drop",tags=["Instructor"])
+def instructor_drop_class(instructor_id: int, class_id: int, student_id: int, request: Request):
 
+    # User Authentication
     if request.headers.get("X-User"):
         current_user = int(request.headers.get("X-User"))
 
@@ -835,44 +832,20 @@ def instructor_drop_class(
 # ==========================================registrar==================================================
 # Create a new class
 @router.post("/registrar/classes/", tags=["Registrar"])
-def create_class(class_data: Class_Registrar):
+def create_class(class_data: Class):
 
-    class_table = get_table_resource(dynamodb, CLASS_TABLE)
+    existing_class = enrollment.get_class_item(class_data.id)
 
-    existing_class = class_table.get_item(Key={"id": class_data.id})
-
-    if existing_class.get("Item"):
+    if existing_class:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Class with ID {class_data.id} already exists",
         )
 
-    class_items = {
-        "id": class_data.id,
-        "name": class_data.name,
-        "course_code": class_data.course_code,
-        "section_number": class_data.section_number,
-        "current_enroll": class_data.current_enroll,
-        "max_enroll": class_data.max_enroll,
-        "department_id": class_data.department_id,
-        "instructor_id": class_data.instructor_id,
-    }
-
     try:
-        class_response = class_table.put_item(Item=class_items)
-
-        response_data = {
-            "id": class_data.id,
-            "name": class_data.name,
-            "course_code": class_data.course_code,
-            "section_number": class_data.section_number,
-            "current_enroll": class_data.current_enroll,
-            "max_enroll": class_data.max_enroll,
-            "department_id": class_data.department_id,
-            "instructor_id": class_data.instructor_id,
-        }
-
-        return response_data
+        
+        enrollment.add_class(class_data)
+        return {"Message": f"Class with ID {class_data.id} created successfully"}
 
     except Exception as e:
         raise HTTPException(
@@ -883,64 +856,59 @@ def create_class(class_data: Class_Registrar):
 
 # Remove a class
 @router.delete("/registrar/classes/{class_id}", tags=["Registrar"])
-def remove_class(class_id: int, db: sqlite3.Connection = Depends(get_db)):
+def remove_class(class_id: int):
 
-    cursor = db.cursor()
+    # fetch the class data 
+    class_data = enrollment.get_class_item(class_id)
 
-    # Check if the class exists in the database
-    cursor.execute("SELECT * FROM class WHERE id = ?", (class_id,))
-    class_data = cursor.fetchone()
-
+    # check if the class exists in the database
     if not class_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Class not found"
         )
-
-    # Delete the class from the database
-    cursor.execute("DELETE FROM class WHERE id = ?", (class_id,))
-    db.commit()
+    
+    enrollment.delete_class_item(class_id)
 
     return {"message": "Class removed successfully"}
 
 
 # Change the assigned instructor for a class
-@router.put(
-    "/registrar/classes/{class_id}/instructors/{instructor_id}", tags=["Registrar"]
-)
-def change_instructor(
-    class_id: int, instructor_id: int, db: sqlite3.Connection = Depends(get_db)
-):
-    cursor = db.cursor()
+@router.put("/registrar/classes/{class_id}/instructors/{instructor_id}", tags=["Registrar"])
+def change_instructor(class_id: int, instructor_id: int):
+    # fetch class data
+    class_data = enrollment.get_class_item(class_id)
 
-    cursor.execute("SELECT * FROM class WHERE id = ?", (class_id,))
-    class_data = cursor.fetchone()
-
+    # check if the class exists in the database
     if not class_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Class not found"
         )
 
-    cursor.execute(
-        """
-        SELECT * FROM users
-        JOIN user_role ON users.uid = user_role.user_id
-        JOIN role ON user_role.role_id = role.rid
-        WHERE uid = ? AND role = ?
-        """,
-        (instructor_id, "instructor"),
-    )
-    instructor_data = cursor.fetchone()
+    # fetch instructor data
+    instructor_data = enrollment.get_user_item(instructor_id)
 
+    # check if the instructor exists in the data
     if not instructor_data:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Instructor not found"
         )
 
-    cursor.execute(
-        "UPDATE instructor_class SET instructor_id = ? WHERE class_id = ?",
-        (instructor_id, class_id),
+    # check if instructor is already assigned to the class
+    if class_data["instructor_id"] == instructor_data["id"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Instructor already assigned to class"
+        )
+    
+    # fetch the enrollment table from the database
+    # update the instructor to the new class 
+    class_table = get_table_resource(dynamodb, CLASS_TABLE)
+    class_table.update_item(
+        Key={
+            'id': class_id
+        },
+        UpdateExpression='SET instructor_id = :instructor_id',
+        ExpressionAttributeValues={':instructor_id': instructor_id}
     )
-    db.commit()
 
     return {"message": "Instructor changed successfully"}
 
@@ -1104,13 +1072,6 @@ def search_for_users(id: Optional[int] = None, name: Optional[str] = None, role:
     # Construct the query based on the provided parameters
     key_condition_expression = None
     filter_expression = None
-    
-    if id is not None:
-        query = Key('id').eq(id)
-    elif name is not None:
-        query = Attr('name').eq(name)
-    elif role is not None:
-        query = Attr('roles').contains(role)
 
     if id is not None:
         key_condition_expression = Key('id').eq(id)

@@ -53,8 +53,8 @@ class Class(BaseModel):
     max_enroll: int
     department: str
     instructor_id: int
-    enrolled: List
-    dropped: List
+    enrolled: List[int]
+    dropped: List[int]
 
 class Class_SQL(BaseModel):
     name: str
