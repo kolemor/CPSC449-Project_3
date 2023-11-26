@@ -6,10 +6,6 @@ class Settings(BaseSettings, env_file=".env", extra="ignore"):
     enrollment_database: str
     enrollment_logging_config: str
 
-class Department(BaseModel):
-    id: int
-    name: str
-
 class Instructor(BaseModel):
     id: int
     name: str
@@ -17,16 +13,6 @@ class Instructor(BaseModel):
 class Student(BaseModel):
     id: int
     name: str
-
-class Class_Info(BaseModel):
-    id: int
-    name: str
-    course_code: str
-    section_number: int
-    current_enroll: int
-    max_enroll: int
-    department: Department
-    instructor: Instructor
 
 class Waitlist_Student(BaseModel):
     class_id: int
@@ -39,10 +25,6 @@ class Waitlist_Instructor(BaseModel):
 class Waitlist_Info(BaseModel):
     class_id: int
     students: List[Waitlist_Instructor]
-
-class Enrolled(BaseModel):
-    student: Student
-    position: int
 
 class Class(BaseModel):
     id: int
@@ -64,22 +46,8 @@ class Class_SQL(BaseModel):
     max_enroll: int
     department_id: int
 
-class Class_Registrar(BaseModel):
-    id: int
-    name: str
-    course_code: str
-    section_number: int
-    current_enroll: int
-    max_enroll: int
-    department_id: int
-    instructor_id: int
-
 class Enroll(BaseModel):
     placement: int
-    class_id: int
-    student_id: int
-
-class Dropped(BaseModel):
     class_id: int
     student_id: int
 

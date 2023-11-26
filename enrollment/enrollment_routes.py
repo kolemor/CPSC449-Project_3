@@ -1,13 +1,9 @@
-import contextlib
-import sqlite3
-import typing
-import collections
 import logging.config
 import boto3
 import redis
 
 from fastapi import Depends, HTTPException, APIRouter, status, Request
-from typing import List, Optional
+from typing import Optional
 from boto3.dynamodb.conditions import Key, Attr
 from enrollment.enrollment_schemas import *
 from enrollment.enrollment_dynamo import Enrollment, PartiQL
@@ -15,37 +11,21 @@ from enrollment.enrollment_redis import Waitlist
 
 settings = Settings()
 router = APIRouter()
-dropped = []
 
 CLASS_TABLE = "enrollment_class"
 USER_TABLE = "enrollment_user"
 DEBUG = False
 FREEZE = False
 MAX_WAITLIST = 3
-# Remove when all endpoints are updated
-database = "enrollment/enrollment.db"
-
 
 def get_logger():
     return logging.getLogger(__name__)
 
-
-# Connect to the old database
-# Remove when all endpoints are updated
-def get_db(logger: logging.Logger = Depends(get_logger)):
-    with contextlib.closing(sqlite3.connect(database, check_same_thread=False)) as db:
-        db.row_factory = sqlite3.Row
-        db.set_trace_callback(logger.debug)
-        yield db
-
-
 # Connect to DynamoDB
 dynamodb = boto3.resource("dynamodb", endpoint_url="http://localhost:5500")
 
-
 def get_table_resource(dynamodb, table_name):
     return dynamodb.Table(table_name)
-
 
 # Create wrapper for PartiQL queries
 wrapper = PartiQL(dynamodb)
@@ -56,34 +36,6 @@ r = redis.Redis(db=1)
 # Create class items
 wl = Waitlist
 enrollment = Enrollment(dynamodb)
-
-# Called when a student is dropped from a class / waiting list
-# and the enrollment place must be reordered
-def reorder_placement(cur, total_enrolled, placement, class_id):
-    counter = 1
-    while counter <= total_enrolled:
-        if counter > placement:
-            cur.execute(
-                """UPDATE enrollment SET placement = placement - 1 
-                WHERE class_id = ? AND placement = ?""",
-                (class_id, counter),
-            )
-        counter += 1
-    cur.execute(
-        """UPDATE class SET current_enroll = current_enroll - 1
-                WHERE id = ?""",
-        (class_id,),
-    )
-
-
-# Used for the search endpoint
-SearchParam = collections.namedtuple("SearchParam", ["name", "operator"])
-SEARCH_PARAMS = [
-    SearchParam("id", "="),
-    SearchParam("name", "LIKE"),
-    SearchParam("roles", "LIKE"),
-]
-
 
 logging.config.fileConfig(
     settings.enrollment_logging_config, disable_existing_loggers=False
@@ -189,7 +141,6 @@ def get_available_classes(student_id: int, request: Request):
 def enroll_student_in_class(student_id: int, class_id: int, request: Request):
 
     class_table = get_table_resource(dynamodb, CLASS_TABLE)
-    user_table = get_table_resource(dynamodb, USER_TABLE)
 
     # User Authentication
     if request.headers.get("X-User"):
@@ -225,58 +176,22 @@ def enroll_student_in_class(student_id: int, class_id: int, request: Request):
         )
 
     # Check if student is already enrolled in the class
-    # get student information
-    student_enrollment = wrapper.run_partiql(
-        f'SELECT * FROM "{CLASS_TABLE}" WHERE id=?', [class_id]
-    )
     # check the information in the table
-    for item in student_enrollment["Items"]:
-        if student_id in item.get("enrolled", []):
+    for enrolled_student_id in class_data.get("enrolled", []):
+        if student_id == enrolled_student_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Student is already enrolled in this class or currently on waitlist",
             )
 
-    # Increment enrollment number in the database
     new_enrollment = class_data.get("current_enroll", 0) + 1
-
-    class_table.update_item(
-        Key={"id": class_id},
-        UpdateExpression="SET current_enroll = :new_enrollment",
-        ExpressionAttributeValues={":new_enrollment": new_enrollment},
-    )
-
-    # Add student to enrolled class in the database
-    class_table.update_item(
-        Key={"id": class_id},
-        UpdateExpression="SET enrolled = list_append(enrolled, :student_id)",
-        ExpressionAttributeValues={":student_id": [student_id]},
-    )
-
-    # get class information
-    student_enrolled = wrapper.run_partiql(
-        f'SELECT * FROM "{CLASS_TABLE}" WHERE id=?', [class_id]
-    )
-
-    # Remove student from dropped table if valid
-    for item in student_enrolled["Items"]:
-        get_dropped = item.get("dropped", [])
-        if student_id in get_dropped:
-            # remove student from dropped
-            get_dropped.remove(student_id)
-            # udpate enrolled table with the removed student
-            class_table.update_item(
-                Key={"id": class_id},
-                UpdateExpression="SET dropped = :dropped",
-                ExpressionAttributeValues={":dropped": get_dropped},
-            )
 
     # Check if the class is full, add student to waitlist if no
     ## code goes here
     if new_enrollment >= class_data.get("max_enroll", 0):
         # freeze is in place
         if not FREEZE:
-            waitlist_count = Waitlist.get_waitlist_count(student_id)
+            waitlist_count = wl.get_waitlist_count(student_id)
             if (
                 waitlist_count < MAX_WAITLIST
                 and new_enrollment < class_data.get("max_enroll", 0) + 15
@@ -291,6 +206,28 @@ def enroll_student_in_class(student_id: int, class_id: int, request: Request):
             return {
                 "message": "Unable to add student to waitlist due to administrative freeze"
             }
+        
+    # Increment enrollment number in the database
+    class_table.update_item(
+        Key={"id": class_id},
+        UpdateExpression="SET current_enroll = :new_enrollment",
+        ExpressionAttributeValues={":new_enrollment": new_enrollment},
+    )
+
+    # Add student to enrolled class in the database
+    class_table.update_item(
+        Key={"id": class_id},
+        UpdateExpression="SET enrolled = list_append(enrolled, :student_id)",
+        ExpressionAttributeValues={":student_id": [student_id]},
+    )
+
+    dropped = class_data.get("dropped", [])
+    new_dropped = [student_id for student_id in dropped if student_id != student_id]
+    class_table.update_item(
+        Key={"id": class_id},
+        UpdateExpression="SET dropped = :dropped",
+        ExpressionAttributeValues={":dropped": new_dropped},
+    )
 
     return {"message": "Student successfully enrolled in class"}
 
@@ -339,7 +276,7 @@ def drop_student_from_class(student_id: int, class_id: int, request: Request):
     )
 
     # fetch waitlist information
-    waitlist_data = Waitlist.is_student_on_waitlist(student_id, class_id)
+    waitlist_data = wl.is_student_on_waitlist(student_id, class_id)
 
     # check if the student is enrolled or on the waitlist
     for item in enrollment_data["Items"]:
