@@ -959,42 +959,31 @@ def freeze_automatic_enrollment():
 
 # Create a new user (used by the user service to duplicate user info)
 @router.post("/registrar/create_user", tags=["Registrar"])
-def create_user(user: Create_User, db: sqlite3.Connection = Depends(get_db)):
+def create_user(user: Create_User):
 
     if DEBUG:
         print("username: ", user.name)
         print("roles: ", user.roles)
 
-    cursor = db.cursor()
+    user_table = get_table_resource(dynamodb,USER_TABLE)
+    response_id = user_table.scan(
+        Select='COUNT',
+        FilterExpression= Key('id').gte(0)
+    )
 
-    cursor.execute("INSERT INTO users (name) VALUES (?)", (user.name,))
+    # incrementing highest + 1 for new id creation
+    new_id = response_id.get('Count', 0)+ 1
 
-    for role in user.roles:
-        cursor.execute("SELECT rid FROM role WHERE role = ?", (role,))
-        rid = cursor.fetchone()
+    user_data = {
+        'id': new_id,
+        'name':user.name,
+        'roles':user.roles
+    }
 
-        cursor.execute(
-            """
-        SELECT * FROM users WHERE name = ?
-        """,
-            (user.name,),
-        )
-        user_data = cursor.fetchone()
+    enrollment.add_user(user_data)
 
-        if DEBUG:
-            print("User ID: ", user_data["uid"])
+    return {"Message": f'user created successfully. {user.name} Assigned id = {new_id}'}
 
-        cursor.execute(
-            """
-            INSERT INTO user_role (user_id, role_id)
-            VALUES (?, ?)
-            """,
-            (user_data["uid"], rid["rid"]),
-        )
-
-    db.commit()
-
-    return {"Message": "user created successfully"}
 
 
 # ==========================================Test Endpoints==================================================
