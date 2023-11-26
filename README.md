@@ -18,6 +18,18 @@
 
 - once running, then you can create the users.db. It should be created in primary and propagated to secondary and tertiary. If not you may need to restart for it to work properly.
 
+## Create the databases or restore them to their default data
+
+`sh ./bin/db_creation.sh`
+
+### If you want to individually create each database, you can instead run these commands from the main directory
+
+`python enrollment/populate_enrollment.py`
+
+`python users/populate_users.py`
+
+- the user database population can take anywhere from 30 seconds to a couple minutes as there are ~600 users, and each one needs to have their password hashed, which takes some time. I'll see if I can optimize this later on, but for now it works
+
 ## Links to test the api
 
 - Enrollment service
@@ -35,18 +47,6 @@
 - KrakenD
 
   `http://localhost:5400/api/`
-
-## Create the databases or restore them to their default data
-
-`sh ./bin/db_creation.sh`
-
-### If you want to individually create each database, you can instead run these commands from the main directory
-
-`python enrollment/populate_enrollment.py`
-
-`python users/populate_users.py`
-
-- the user database population can take anywhere from 30 seconds to a couple minutes as there are ~600 users, and each one needs to have their password hashed, which takes some time. I'll see if I can optimize this later on, but for now it works
 
 # Enrollment Service testing variables
 
@@ -72,7 +72,7 @@
 
 # Overview of files
 
-## Enrollment Service (Project 1)
+## Enrollment Service
 
 - enrollment_routes.py:
 
@@ -88,13 +88,22 @@
 
 - populate_enrollment.py:
 
-  creates and populates the enrollment database
+  creates and populates the dynamodb and redis databases
 
 - enrollment_schemas.py:
 
   has all the base models for the service
 
-## Users Service (Project 2)
+- enrollment_dynamo.py
+
+  has two classes, one called enrollment which has a bunch of methods used for dynamodb data manipulation,
+  with the other called partiQL which has methods used for partiQL querying
+
+- enrollment_redis.py
+
+  has a class called Waitlist which has a bunch of methods used to manipulate data in redis.
+
+## Users Service
 
 - populate_users.py:
 

@@ -1,12 +1,25 @@
-import sqlite3
-import os
-from enrollment_schemas import Class_SQL, Enroll, Dropped
+import redis
+import boto3
+import logging
 
-database = "enrollment/enrollment.db"
+from enrollment_schemas import Class, Enroll, User_info
+from enrollment_dynamo import Enrollment, PartiQL
+from enrollment_redis import Waitlist
 
-#Remove database if it exists before creating and populating it
-if os.path.exists(database):
-    os.remove(database)
+
+# turn debug print statements on or off
+DEBUG = False
+
+# Configure the logger
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Connect to Redis
+r = redis.Redis(db=1)
+
+# Connect to DynamoDB
+dynamodb = boto3.resource('dynamodb', endpoint_url='http://localhost:5500')
+table_prefix = "enrollment_"
 
 # Lists of dummy names
 surnames_list=['Smith','Johnson','Williams','Brown','Jones','Miller','Davis','Garcia','Rodriguez','Wilson','Martinez','Anderson','Taylor','Thomas','Hernandez','Moore','Martin','Jackson','Thompson','White','Lopez','Lee','Gonzalez','Harris','Clark','Lewis','Robinson','Walker','Perez','Hall','Young','Allen','Sanchez','Wright','King','Scott','Green','Baker','Adams','Nelson','Hill','Ramirez','Campbell','Mitchell','Roberts','Carter','Phillips','Evans','Turner','Torres','Parker','Collins','Edwards','Stewart','Flores','Morris','Nguyen','Murphy','Rivera','Cook','Rogers','Morgan','Peterson','Cooper','Reed','Bailey','Bell','Gomez','Kelly','Howard','Ward','Cox','Diaz','Richardson','Wood','Watson','Brooks','Bennett','Gray','James','Reyes','Cruz','Hughes','Price','Myers','Long','Foster','Sanders','Ross','Morales','Powell','Sullivan','Russell','Ortiz','Jenkins','Gutierrez','Perry','Butler','Barnes','Fisher','Henderson','Coleman','Simmons','Patterson','Jordan','Reynolds','Hamilton','Graham','Kim','Gonzales','Alexander','Ramos','Wallace','Griffin','West','Cole','Hayes','Chavez','Gibson','Bryant','Ellis','Stevens','Murray','Ford','Marshall','Owens','Mcdonald','Harrison','Ruiz','Kennedy','Wells','Alvarez','Woods','Mendoza','Castillo','Olson','Webb','Washington','Tucker','Freeman','Burns','Henry','Vasquez','Snyder','Simpson','Crawford','Jimenez','Porter','Mason','Shaw','Gordon','Wagner','Hunter','Romero','Hicks','Dixon','Hunt','Palmer','Robertson','Black','Holmes','Stone','Meyer','Boyd','Mills','Warren','Fox','Rose','Rice','Moreno','Schmidt','Patel','Ferguson','Nichols','Herrera','Medina','Ryan','Fernandez','Weaver','Daniels','Stephens','Gardner','Payne','Kelley','Dunn','Pierce','Arnold','Tran','Spencer','Peters','Hawkins','Grant','Hansen','Castro','Hoffman','Hart','Elliott','Cunningham','Knight','Bradley','Carroll','Hudson','Duncan','Armstrong','Berry','Andrews','Johnston','Ray','Lane','Riley','Carpenter','Perkins','Aguilar','Silva','Richards','Willis','Matthews','Chapman','Lawrence','Garza','Vargas','Watkins','Wheeler','Larson','Carlson','Harper','George','Greene','Burke','Guzman','Morrison','Munoz','Jacobs','Obrien','Lawson','Franklin','Lynch','Bishop','Carr','Salazar','Austin','Mendez','Gilbert','Jensen','Williamson','Montgomery','Harvey','Oliver','Howell','Dean','Hanson','Weber','Garrett','Sims','Burton','Fuller','Soto','Mccoy','Welch','Chen','Schultz','Walters','Reid','Fields','Walsh','Little','Fowler','Bowman','Davidson','May','Day','Schneider','Newman','Brewer','Lucas','Holland','Wong','Banks','Santos','Curtis','Pearson','Delgado','Valdez','Pena','Rios','Douglas','Sandoval','Barrett','Hopkins','Keller','Guerrero','Stanley','Bates','Alvarado','Beck','Ortega','Wade','Estrada','Contreras','Barnett','Caldwell','Santiago','Lambert','Powers','Chambers','Nunez','Craig','Leonard','Lowe','Rhodes','Byrd','Gregory','Shelton','Frazier','Becker','Maldonado','Fleming','Vega','Sutton','Cohen','Jennings','Parks','Mcdaniel','Watts','Barker','Norris','Vaughn','Vazquez','Holt','Schwartz','Steele','Benson','Neal','Dominguez','Horton','Terry','Wolfe','Hale','Lyons','Graves','Haynes','Miles','Park','Warner','Padilla','Bush','Thornton','Mccarthy','Mann','Zimmerman','Erickson','Fletcher','Mckinney','Page','Dawson','Joseph','Marquez','Reeves','Klein','Espinoza','Baldwin','Moran','Love','Robbins','Higgins','Ball','Cortez','Le','Griffith','Bowen','Sharp','Cummings','Ramsey','Hardy','Swanson','Barber','Acosta','Luna','Chandler','Blair','Daniel','Cross','Simon','Dennis','Oconnor','Quinn','Gross','Navarro','Moss','Fitzgerald','Doyle','Mclaughlin','Rojas','Rodgers','Stevenson','Singh','Yang','Figueroa','Harmon','Newton','Paul','Manning','Garner','Mcgee','Reese','Francis','Burgess','Adkins','Goodman','Curry','Brady','Christensen','Potter','Walton','Goodwin','Mullins','Molina','Webster','Fischer','Campos','Avila','Sherman','Todd','Chang','Blake','Malone','Wolf','Hodges','Juarez','Gill','Farmer','Hines','Gallagher','Duran','Hubbard','Cannon','Miranda','Wang','Saunders','Tate','Mack','Hammond','Carrillo','Townsend','Wise','Ingram','Barton','Mejia','Ayala','Schroeder','Hampton','Rowe','Parsons','Frank','Waters','Strickland','Osborne','Maxwell','Chan','Deleon','Norman','Harrington','Casey','Patton','Logan','Bowers','Mueller','Glover','Floyd','Hartman','Buchanan','Cobb','French','Kramer','Mccormick','Clarke','Tyler','Gibbs','Moody','Conner','Sparks','Mcguire','Leon','Bauer','Norton','Pope','Flynn','Hogan','Robles','Salinas','Yates','Lindsey','Lloyd','Marsh','Mcbride','Owen','Solis','Pham','Lang','Pratt','Lara','Brock','Ballard','Trujillo','Shaffer','Drake','Roman','Aguirre','Morton','Stokes','Lamb','Pacheco','Patrick','Cochran','Shepherd','Cain','Burnett','Hess','Li','Cervantes','Olsen','Briggs','Ochoa','Cabrera','Velasquez','Montoya','Roth','Meyers','Cardenas','Fuentes','Weiss','Wilkins','Hoover','Nicholson','Underwood','Short','Carson','Morrow','Colon','Holloway','Summers','Bryan','Petersen','Mckenzie','Serrano','Wilcox','Carey','Clayton','Poole','Calderon','Gallegos','Greer','Rivas','Guerra','Decker','Collier','Wall','Whitaker','Bass','Flowers','Davenport','Conley','Houston','Huff','Copeland','Hood','Monroe','Massey','Roberson','Combs','Franco','Larsen','Pittman','Randall','Skinner','Wilkinson','Kirby','Cameron','Bridges','Anthony','Richard','Kirk','Bruce','Singleton','Mathis','Bradford','Boone','Abbott','Charles','Allison','Sweeney','Atkinson','Horn','Jefferson','Rosales','York','Christian','Phelps','Farrell','Castaneda','Nash','Dickerson','Bond','Wyatt','Foley','Chase','Gates','Vincent','Mathews','Hodge','Garrison','Trevino','Villarreal','Heath','Dalton','Valencia','Callahan','Hensley','Atkins','Huffman','Roy','Boyer','Shields','Lin','Hancock','Grimes','Glenn','Cline','Delacruz','Camacho','Dillon','Parrish','Oneill','Melton','Booth','Kane','Berg','Harrell','Pitts','Savage','Wiggins','Brennan','Salas','Marks','Russo','Sawyer','Baxter','Golden','Hutchinson','Liu','Walter','Mcdowell','Wiley','Rich','Humphrey','Johns','Koch','Suarez','Hobbs','Beard','Gilmore','Ibarra','Keith','Macias','Khan','Andrade','Ware','Stephenson','Henson','Wilkerson','Dyer','Mcclure','Blackwell','Mercado','Tanner','Eaton','Clay','Barron','Beasley','Oneal','Small','Preston','Wu','Zamora','Macdonald','Vance','Snow','Mcclain','Stafford','Orozco','Barry','English','Shannon','Kline','Jacobson','Woodard','Huang','Kemp','Mosley','Prince','Merritt','Hurst','Villanueva','Roach','Nolan','Lam','Yoder','Mccullough','Lester','Santana','Valenzuela','Winters','Barrera','Orr','Leach','Berger','Mckee','Strong','Conway','Stein','Whitehead','Bullock','Escobar','Knox','Meadows','Solomon','Velez','Odonnell','Kerr','Stout','Blankenship','Browning','Kent','Lozano','Bartlett','Pruitt','Buck','Barr','Gaines','Durham','Gentry','Mcintyre','Sloan','Rocha','Melendez','Herman','Sexton','Moon','Hendricks','Rangel','Stark','Lowery','Hardin','Hull','Sellers','Ellison','Calhoun','Gillespie','Mora','Knapp','Mccall','Morse','Dorsey','Weeks','Nielsen','Livingston','Leblanc','Mclean','Bradshaw','Glass','Middleton','Buckley','Schaefer','Frost','Howe','House','Mcintosh','Ho','Pennington','Reilly','Hebert','Mcfarland','Hickman','Noble','Spears','Conrad','Arias','Galvan','Velazquez','Huynh','Frederick','Randolph','Cantu','Fitzpatrick','Mahoney','Peck','Villa','Michael','Donovan','Mcconnell','Walls','Boyle','Mayer','Zuniga','Giles','Pineda','Pace','Hurley','Mays','Mcmillan','Crosby','Ayers','Case','Bentley','Shepard','Everett','Pugh','David','Mcmahon','Dunlap','Bender','Hahn','Harding','Acevedo','Raymond','Blackburn','Duffy','Landry','Dougherty','Bautista','Shah','Potts','Arroyo','Valentine','Meza','Gould','Vaughan','Fry','Rush','Avery','Herring','Dodson','Clements','Sampson','Tapia','Bean','Lynn','Crane','Farley','Cisneros','Benton','Ashley','Mckay','Finley','Best','Blevins','Friedman','Moses','Sosa','Blanchard','Huber','Frye','Krueger','Bernard','Rosario','Rubio','Mullen','Benjamin','Haley','Chung','Moyer','Choi','Horne','Yu','Woodward','Ali','Nixon','Hayden','Rivers','Estes','Mccarty','Richmond','Stuart','Maynard','Brandt','Oconnell','Hanna','Sanford','Sheppard','Church','Burch','Levy','Rasmussen','Coffey','Ponce','Faulkner','Donaldson','Schmitt','Novak','Costa','Montes','Booker','Cordova','Waller','Arellano','Maddox','Mata','Bonilla','Stanton','Compton','Kaufman','Dudley','Mcpherson','Beltran','Dickson','Mccann','Villegas','Proctor','Hester','Cantrell','Daugherty','Cherry','Bray','Davila','Rowland','Madden','Levine','Spence','Good','Irwin','Werner','Krause','Petty','Whitney','Baird','Hooper','Pollard','Zavala','Jarvis','Holden','Haas','Hendrix','Mcgrath','Bird','Lucero','Terrell','Riggs','Joyce','Mercer','Rollins','Galloway','Duke','Odom','Andersen','Downs','Hatfield','Benitez','Archer','Huerta','Travis','Mcneil','Hinton','Zhang','Hays','Mayo','Fritz','Branch','Mooney','Ewing','Ritter','Esparza','Frey','Braun','Gay','Riddle','Haney','Kaiser','Holder','Chaney','Mcknight','Gamble','Vang','Cooley','Carney','Cowan','Forbes','Ferrell','Davies','Barajas','Shea','Osborn','Bright','Cuevas','Bolton','Murillo','Lutz','Duarte','Kidd','Key','Cooke']
@@ -39,120 +52,210 @@ for male in mname:
     names.append(fname[last])
     last += 1
 
+# Create sample data
+department = ["CHEM","CPSC","ENGL","MATH","PHYS","HIST","BIOL","GEOL"]
+
 sample_classes = [
-    Class_SQL(
+    Class(
+        id=1,
         name="Web Back-End Engineering",
         course_code="449",
         section_number=1,
         current_enroll=10,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=501,
+        enrolled=[],
+        dropped=[11,12,13,14],
     ),
-    Class_SQL(
+    Class(
+        id=2,
         name="Web Back-End Engineering",
         course_code="449",
         section_number=2,
         current_enroll=24,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=502,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=3,
         name="Web Front-End Engineering",
         course_code="349",
         section_number=1,
         current_enroll=14,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=503,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=4,
         name="Introduction to Computer Science",
         course_code="120",
         section_number=1,
         current_enroll=32,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=504,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=5,
         name="Calculus I",
         course_code="150A",
         section_number=1,
         current_enroll=28,
         max_enroll=30,
-        department_id=4,
+        department="MATH",
+        instructor_id=505,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=6,
         name="Calculus II",
         course_code="150B",
         section_number=1,
         current_enroll=30,
         max_enroll=30,
-        department_id=3,
+        department="MATH",
+        instructor_id=506,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=7,
         name="World History",
         course_code="181",
         section_number=1,
         current_enroll=15,
         max_enroll=30,
-        department_id=6,
+        department="HIST",
+        instructor_id=507,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=8,
         name="Anatomy & Physiology",
         course_code="211",
         section_number=1,
         current_enroll=30,
         max_enroll=30,
-        department_id=7,
+        department="BIOL",
+        instructor_id=508,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=9,
         name="Earth Science",
         course_code="171",
         section_number=1,
         current_enroll=28,
         max_enroll=30,
-        department_id=8,
+        department="GEOL",
+        instructor_id=509,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=10,
         name="Advanced C++",
         course_code="421",
         section_number=1,
         current_enroll=12,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=510,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=11,
         name="Python Programming",
         course_code="222",
         section_number=1,
         current_enroll=27,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=511,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=12,
         name="Python Programming",
         course_code="222",
         section_number=2,
         current_enroll=45,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=511,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=13,
         name="Python Programming",
         course_code="222",
         section_number=3,
         current_enroll=35,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=513,
+        enrolled=[],
+        dropped=[],
     ),
-    Class_SQL(
+    Class(
+        id=14,
         name="Python Programming",
         course_code="222",
         section_number=4,
         current_enroll=44,
         max_enroll=30,
-        department_id=2,
+        department="CPSC",
+        instructor_id=514,
+        enrolled=[],
+        dropped=[],
     ),
 ]
+
+# Enroll students in classes based on current_enroll
+place = 1
+sid = 1
+for class_data in sample_classes:
+    while place <= class_data.current_enroll:
+        class_data.enrolled.append(sid)
+        sid += 1
+        place += 1
+    place = 1
+
+sample_users = []
+for index, user_name in enumerate(names, start=1):
+    if index <= 500:
+        sample_users.append(User_info(
+        id=index,
+        name=user_name,
+        roles=['student']
+        ))
+    elif 500 < index <= 550:
+        sample_users.append(User_info(
+        id=index,
+        name=user_name,
+        roles=['instructor']
+        ))
+    else:
+        sample_users.append(User_info(
+        id=index,
+        name=user_name,
+        roles=['instructor', 'registrar']
+        ))
 
 sample_enrollments = []
 place = 1
@@ -168,323 +271,77 @@ for index, class_data in enumerate(sample_classes, start = 1):
         place += 1
     place = 1
 
-sample_dropped = [
-    Dropped(
-        class_id=2,
-        student_id=1,
-    ),
-    Dropped(
-        class_id=2,
-        student_id=2,
-    ),
-    Dropped(
-        class_id=2,
-        student_id=3,
-    ),
-    Dropped(
-        class_id=2,
-        student_id=4,
-    ),
-]
 
-""" create a database connection to the SQLite database
-        specified by db_file
-    :param db_file: database file
-    :return: Connection object or None
-    """
-def create_connection(db_file):
-    conn = None
-    try:
-        conn = sqlite3.connect(db_file)
-        return conn
-    except sqlite3.Error as e:
-        print("Error:", e)
-
-    return conn
-
-""" create a table from the create_table_sql statement
-:param conn: Connection object
-:param create_table_sql: a CREATE TABLE statement
-:return:
-"""
-def create_table(conn, create_table_sql):
-    try:
-        c = conn.cursor()
-        c.execute(create_table_sql)
-    except sqlite3.Error as e:
-        print("Error:", e)
-
-def select_query(conn, query):
-    try:
-        c = conn.cursor()
-        c.execute(query)
-        rows = c.fetchall()
-        for row in rows:
-            print(row)
-    except sqlite3.Error as e:
-        print("Error:", e)
-
-# populates db
-def populate_database():
-    conn = create_connection(database)
-
-    department_table = """ CREATE TABLE IF NOT EXISTS department (
-                            id integer PRIMARY KEY,
-                            name text
-                        ); """
-    create_table(conn, department_table)
-
-    users_table = """ CREATE TABLE IF NOT EXISTS users (
-                            uid integer PRIMARY KEY,
-                            name text
-                        ); """
-    create_table(conn, users_table)
-
-    role_table = """ CREATE TABLE IF NOT EXISTS role (
-                            rid integer PRIMARY KEY,
-                            role text UNIQUE
-                        ); """
-    create_table(conn, role_table)
-
-    userrole_table = """ CREATE TABLE IF NOT EXISTS user_role (
-                            user_id integer,
-                            role_id integer,
-                            PRIMARY KEY (user_id, role_id),
-                            FOREIGN KEY (user_id) REFERENCES users (uid),
-                            FOREIGN KEY (role_id) REFERENCES roles (rid)
-                        ); """
-    create_table(conn, userrole_table)
-
-    class_table = """ CREATE TABLE IF NOT EXISTS class (
-                        id integer PRIMARY KEY,
-                        name text NOT NULL,
-                        course_code text NOT NULL,
-                        section_number int NOT NULL,
-                        current_enroll integer,
-                        max_enroll integer,
-                        department_id integer,
-                        FOREIGN KEY (department_id) REFERENCES department (id)
-                    ); """
-    create_table(conn, class_table)
-
-    enrollment_table = """ CREATE TABLE IF NOT EXISTS enrollment (
-                            placement integer,
-                            student_id integer,
-                            class_id integer,
-                            PRIMARY KEY (student_id, class_id),
-                            FOREIGN KEY (student_id) REFERENCES users (uid),
-                            FOREIGN KEY (class_id) REFERENCES class (id)
-                            ); """
-    create_table(conn, enrollment_table)
-
-    instructorclass_table = """ CREATE TABLE IF NOT EXISTS instructor_class (
-                            instructor_id integer,
-                            class_id integer,
-                            PRIMARY KEY (class_id),
-                            FOREIGN KEY (instructor_id) REFERENCES users (uid),
-                            FOREIGN KEY (class_id) REFERENCES class(id)
-                            ); """
-    create_table(conn, instructorclass_table)
+# ---------------------------- Enrollment Initialization ----------------------------------------
 
 
-    dropped_table ="""CREATE TABLE IF NOT EXISTS dropped (
-                    student_id integer,
-                    class_id integer,
-                    PRIMARY KEY (student_id, class_id),
-                    FOREIGN KEY(student_id) REFERENCES users (uid),
-                    FOREIGN KEY(class_id) REFERENCES class (id)
-                    )"""
-    create_table(conn, dropped_table)
-
-    waitlist_table ="""CREATE TABLE IF NOT EXISTS waitlist (
-                    student_id integer,
-                    waitlist_count integer,
-                    PRIMARY KEY (student_id),
-                    FOREIGN KEY(student_id) REFERENCES users (uid)
-                    )"""
-    create_table(conn, waitlist_table)
-
-    cursor = conn.cursor()
+def create_database(enrollment, wrapper, waitlist):
+    classes = "class"
+    users = "user"
+    class_table = table_prefix + classes
+    user_table = table_prefix + users
     
-    roles = ['student', 'instructor', 'registrar']
-    for role in roles:
-        cursor.execute(
-            """
-            INSERT INTO role (role)
-            VALUES (?)
-            """,
-            (role,)
-        )
+    # Check if the tables exist, if they do delete them
+    if enrollment.check_table_exists(class_table):
+        enrollment.delete_table(classes)
+        enrollment.delete_table(users)
+
+    # create the tables
+    enrollment.create_table(classes)
+    enrollment.create_table(users)
+
+    # initialize the tables with sample data
+    for class_data in sample_classes:
+        enrollment.add_class(class_data)
     
-    department = ["CHEM","CPSC","ENGL","MATH","PHYS","HIST","BIOL","GEOL"]
-    for dept in department:
-        cursor.execute(
-            """
-            INSERT INTO department (name)
-            VALUES (?)
-            """,
-            (dept,)
-        )
+    for user_data in sample_users:
+        enrollment.add_user(user_data)
 
-    for index, user_name in enumerate(names, start=1):
-        cursor.execute(
-            """
-            INSERT INTO users (name)
-            VALUES (?)
-            """,
-            (user_name,)
-        )
-        if index <= 500:
-            cursor.execute(
-                """
-                INSERT INTO user_role (user_id, role_id)
-                VALUES (?, ?)
-                """,
-                (index, 1)
-            )
-            cursor.execute(
-                """
-                INSERT INTO waitlist (student_id, waitlist_count)
-                VALUES (?, ?)
-                """,
-                (index, 0)
-            )
-        else:
-            cursor.execute(
-                """
-                INSERT INTO user_role (user_id, role_id)
-                VALUES (?, ?)
-                """,
-                (index, 2)
-            )
-        if index > 550:
-            cursor.execute(
-                """
-                INSERT INTO user_role (user_id, role_id)
-                VALUES (?, ?)
-                """,
-                (index, 3)
-            )
+    # flush all data from the redis db
+    r.flushdb()
 
-    for index, class_data in enumerate(sample_classes, start = 1):
-        cursor.execute(
-            """
-            INSERT INTO class (name, course_code, section_number, current_enroll, max_enroll, department_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                class_data.name,
-                class_data.course_code,
-                class_data.section_number,
-                class_data.current_enroll,
-                class_data.max_enroll,
-                class_data.department_id,
-            )
-        )
-        cursor.execute(
-            """
-            INSERT INTO instructor_class (instructor_id, class_id)
-            VALUES (?, ?)
-            """,
-            (index+500, index)
-        )
-
+    # initialize the redis db with waitlist information
     for enrollment_data in sample_enrollments:
         if enrollment_data.placement > 30:
-            cursor.execute(
-                """
-                UPDATE waitlist SET waitlist_count = 1
-                WHERE student_id = (?)
-                """,
-                (enrollment_data.student_id,)
-            )
-        cursor.execute(
-            """
-            INSERT INTO enrollment (placement, student_id, class_id)
-            VALUES (?, ?, ?)
-            """,
-            (
-            enrollment_data.placement,
-            enrollment_data.student_id,
-            enrollment_data.class_id
-            )
-        )
-
-    for dropped_data in sample_dropped:
-        cursor.execute(
-            """
-            INSERT INTO dropped (student_id, class_id)
-            VALUES (?, ?)
-            """,
-            (
-            dropped_data.student_id,
-            dropped_data.class_id
-            )
-        )
+            waitlist.add_waitlists(enrollment_data.class_id, enrollment_data.student_id)
     
-    #Update more tables for testing purposes
-    #Have student id = 1 have max number of waitlists
-    cursor.execute(
-        """
-        UPDATE class SET current_enroll = 31
-        WHERE id = 8
-        """
-    )
-    cursor.execute(
-        """
-        INSERT INTO enrollment (placement, student_id, class_id)
-        VALUES (31, 1, 8)
-        """
-    )
-    cursor.execute(
-        """
-        UPDATE class SET current_enroll = 33
-        WHERE id = 4
-        """
-    )
-    cursor.execute(
-        """
-        INSERT INTO enrollment (placement, student_id, class_id)
-        VALUES (33, 1, 4)
-        """
-    )
-    cursor.execute(
-        """
-        UPDATE class SET current_enroll = 36
-        WHERE id = 13
-        """
-    )
-    cursor.execute(
-        """
-        INSERT INTO enrollment (placement, student_id, class_id)
-        VALUES (36, 1, 13)
-        """
-    )
-    cursor.execute(
-        """
-        UPDATE waitlist SET waitlist_count = 3
-        WHERE student_id = 1
-        """
-    )
+    # add student_id 1 to three different waitlists
+    # Used for testing purposes so at least 1 student has max waitlists
+    waitlist.add_waitlists(4, 1)
+    waitlist.add_waitlists(8, 1)
+    waitlist.add_waitlists(13, 1)
 
-    # Create Indexes
-    cursor.execute(
-        "CREATE INDEX enrollment_idx_af26e187 ON enrollment(class_id, placement)"
-    )
+    if DEBUG:
+        debug_class = []
+        debug_user = []
+        # Print all classes
+        for class_data in sample_classes:
+            output = wrapper.run_partiql(
+                f'SELECT * FROM "{class_table}" WHERE id=?', [class_data.id]
+            )
+            debug_class.append(output["Items"])
+        print("\nClass Table: \n", debug_class)
+    
+        # Print all users
+        for user_data in sample_users:
+            output = wrapper.run_partiql(
+                f'SELECT * FROM "{user_table}" WHERE id=?', [user_data.id]
+            )
+            debug_user.append(output["Items"])
+        print("\nUser Table: \n", debug_user)
 
-    cursor.execute(
-        "CREATE INDEX dropped_idx_20095c72 ON dropped(class_id)"
-    )
+        all_class_waitlists = waitlist.get_all_class_waitlists()
+        all_student_waitlists = waitlist.get_all_student_waitlists()
 
-    cursor.execute(
-        "CREATE INDEX users_idx_00015c29 ON users(name)"
-    )
+        print("All Class Waitlists:", all_class_waitlists)
+        print("All Student Waitlists:", all_student_waitlists)
 
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-    print("Database populated :D")
 
 if __name__ == "__main__":
-    populate_database()
+    try:
+        enrollment = Enrollment(dynamodb)
+        wrapper = PartiQL(dynamodb)
+        waitlist = Waitlist
+        create_database(enrollment, wrapper, waitlist)
+    except Exception as e:
+        print(f"Something went wrong with the database creation! Here's what: {e}")

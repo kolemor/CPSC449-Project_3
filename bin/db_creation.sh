@@ -5,9 +5,7 @@ DBU_LOCATION="./var/primary/fuse/users.db"
 
 python3 ./enrollment/populate_enrollment.py
 
-if test -f $DBE_LOCATION; then
-	echo "Enrollment service database has been created."
-fi
+echo "Enrollment service database has been created."
 
 python3 ./users/populate_users.py
 
