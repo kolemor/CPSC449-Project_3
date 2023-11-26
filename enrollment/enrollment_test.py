@@ -9,7 +9,7 @@ from enrollment_redis import Waitlist
 from pprint import pprint
 
 # turn debug print statements on or off
-DEBUG = False
+DEBUG = True
 
 # Configure the logger
 logging.basicConfig(level=logging.INFO)
@@ -293,39 +293,10 @@ def create_database(enrollment, wrapper, waitlist):
 
     # initialize the tables with sample data
     for class_data in sample_classes:
-        wrapper.run_partiql(
-        f"""INSERT INTO \"{class_table}\" VALUE 
-        {{
-            'id': ?, 
-            'name': ?, 
-            'course_code': ?, 
-            'section_number': ?, 
-            'current_enroll': ?, 
-            'max_enroll': ?, 
-            'department': ?, 
-            'instructor_id': ?, 
-            'enrolled': ?, 
-            'dropped': ?
-        }}""",
-        [
-            class_data.id,
-            class_data.name,
-            class_data.course_code,
-            class_data.section_number,
-            class_data.current_enroll,
-            class_data.max_enroll,
-            class_data.department,
-            class_data.instructor_id,
-            class_data.enrolled,
-            class_data.dropped
-        ],
-    )
+        enrollment.add_class(class_data)
     
     for user_data in sample_users:
-        wrapper.run_partiql(
-            f"""INSERT INTO \"{user_table}\" VALUE {{'id': ?, 'name': ?, 'roles': ?}}""",
-            [user_data.id, user_data.name, user_data.roles],
-        )
+        enrollment.add_user(user_data)
 
     # flush all data from the redis db
     r.flushdb()
@@ -340,6 +311,13 @@ def create_database(enrollment, wrapper, waitlist):
     waitlist.add_waitlists(4, 1)
     waitlist.add_waitlists(8, 1)
     waitlist.add_waitlists(13, 1)
+
+    print("class 1: ", waitlist.get_class_waitlist(1))
+    print("class 14: ", waitlist.get_class_waitlist(14))
+    print("Student 1: ", waitlist.get_student_waitlist(1))
+    print("Student 2: ", waitlist.get_student_waitlist(2))
+    print("Student 1 count: ", waitlist.get_waitlist_count(1))
+    print("class waitlists: ", waitlist.get_all_class_waitlists())
 
     if DEBUG:
         debug_class = []

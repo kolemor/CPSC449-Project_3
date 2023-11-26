@@ -7,6 +7,8 @@ import boto3
 import redis
 
 from fastapi import Depends, HTTPException, APIRouter, status, Request
+from typing import List, Optional
+from boto3.dynamodb.conditions import Key, Attr
 from enrollment.enrollment_schemas import *
 from enrollment.enrollment_dynamo import Enrollment, PartiQL
 from enrollment.enrollment_redis import Waitlist
@@ -77,18 +79,9 @@ def reorder_placement(cur, total_enrolled, placement, class_id):
 # Used for the search endpoint
 SearchParam = collections.namedtuple("SearchParam", ["name", "operator"])
 SEARCH_PARAMS = [
-    SearchParam(
-        "uid",
-        "=",
-    ),
-    SearchParam(
-        "name",
-        "LIKE",
-    ),
-    SearchParam(
-        "role",
-        "LIKE",
-    ),
+    SearchParam("id", "="),
+    SearchParam("name", "LIKE"),
+    SearchParam("roles", "LIKE"),
 ]
 
 
@@ -183,6 +176,9 @@ def get_available_classes(student_id: int, request: Request):
             max_waitlist=15,
         )
         class_instances.append(class_instance)
+    
+    # Sort the class_instances list based on the id attribute
+    class_instances = sorted(class_instances, key=lambda x: x.id)
 
     return {"Classes": class_instances}
 
@@ -993,42 +989,31 @@ def freeze_automatic_enrollment():
 
 # Create a new user (used by the user service to duplicate user info)
 @router.post("/registrar/create_user", tags=["Registrar"])
-def create_user(user: Create_User, db: sqlite3.Connection = Depends(get_db)):
+def create_user(user: Create_User):
 
     if DEBUG:
         print("username: ", user.name)
         print("roles: ", user.roles)
 
-    cursor = db.cursor()
+    user_table = get_table_resource(dynamodb,USER_TABLE)
+    response_id = user_table.scan(
+        Select='COUNT',
+        FilterExpression= Key('id').gte(0)
+    )
 
-    cursor.execute("INSERT INTO users (name) VALUES (?)", (user.name,))
+    # incrementing highest + 1 for new id creation
+    new_id = response_id.get('Count', 0)+ 1
 
-    for role in user.roles:
-        cursor.execute("SELECT rid FROM role WHERE role = ?", (role,))
-        rid = cursor.fetchone()
+    user_data = {
+        'id': new_id,
+        'name':user.name,
+        'roles':user.roles
+    }
 
-        cursor.execute(
-            """
-        SELECT * FROM users WHERE name = ?
-        """,
-            (user.name,),
-        )
-        user_data = cursor.fetchone()
+    enrollment.add_user(user_data)
 
-        if DEBUG:
-            print("User ID: ", user_data["uid"])
+    return {"Message": f'user created successfully. {user.name} Assigned id = {new_id}'}
 
-        cursor.execute(
-            """
-            INSERT INTO user_role (user_id, role_id)
-            VALUES (?, ?)
-            """,
-            (user_data["uid"], rid["rid"]),
-        )
-
-    db.commit()
-
-    return {"Message": "user created successfully"}
 
 
 # ==========================================Test Endpoints==================================================
@@ -1038,21 +1023,10 @@ def create_user(user: Create_User, db: sqlite3.Connection = Depends(get_db)):
 
 # Gets currently enrolled classes for a student
 @router.get("/debug/students/{student_id}/enrolled", tags=["Debug"])
-def view_enrolled_classes(student_id: int, db: sqlite3.Connection = Depends(get_db)):
-    cursor = db.cursor()
+def view_enrolled_classes(student_id: int):
 
     # Check if the student exists in the database
-    cursor.execute(
-        """
-        SELECT * FROM users
-        JOIN user_role ON users.uid = user_role.user_id
-        JOIN role ON user_role.role_id = role.rid
-        JOIN waitlist ON users.uid = waitlist.student_id
-        WHERE uid = ? AND role = ?
-        """,
-        (student_id, "student"),
-    )
-    student_data = cursor.fetchone()
+    student_data = enrollment.get_user_item(student_id)
 
     if not student_data:
         raise HTTPException(
@@ -1060,22 +1034,12 @@ def view_enrolled_classes(student_id: int, db: sqlite3.Connection = Depends(get_
         )
 
     # Check if the student is enrolled in any classes
-    cursor.execute(
-        """
-        SELECT class.id AS class_id, class.name AS class_name, class.course_code,
-                class.section_number, class.current_enroll, class.max_enroll,
-                department.id AS department_id, department.name AS department_name,
-                users.uid AS instructor_id, users.name AS instructor_name
-            FROM class
-            JOIN department ON class.department_id = department.id
-            JOIN instructor_class ON class.id = instructor_class.class_id
-            JOIN users ON instructor_class.instructor_id = users.uid
-            JOIN enrollment ON class.id = enrollment.class_id
-            WHERE enrollment.student_id = ? AND class.current_enroll < class.max_enroll
-        """,
-        (student_id,),
+    class_table = get_table_resource(dynamodb, CLASS_TABLE)
+    response = class_table.scan(
+        FilterExpression='contains(enrolled, :student_id)',
+        ExpressionAttributeValues={':student_id': student_id}
     )
-    enrolled_data = cursor.fetchall()
+    enrolled_data = response.get('Items', [])
 
     if not enrolled_data:
         raise HTTPException(
@@ -1083,47 +1047,46 @@ def view_enrolled_classes(student_id: int, db: sqlite3.Connection = Depends(get_
             detail="Student not enrolled in any classes",
         )
 
-    # Create a list to store the Class_Info instances
-    enrolled_list = []
+    # Create a list to store the Class instances
+    enrolled_instances = []
 
-    # Iterate through the query results and create Class_Info instances
-    for row in enrolled_data:
-        class_info = Class_Info(
-            id=row["class_id"],
-            name=row["class_name"],
-            course_code=row["course_code"],
-            section_number=row["section_number"],
-            current_enroll=row["current_enroll"],
-            max_enroll=row["max_enroll"],
-            department=Department(id=row["department_id"], name=row["department_name"]),
-            instructor=Instructor(id=row["instructor_id"], name=row["instructor_name"]),
+    # Iterate through the query results and create Class instances
+    for item in enrolled_data:
+        # get instructor information
+        instructor_data = enrollment.get_user_item(item["instructor_id"])
+        # Get waitlist information
+        if item["current_enroll"] > item["max_enroll"]:
+            current_enroll = item["max_enroll"]
+            waitlist = item["current_enroll"] - item["max_enroll"]
+        else:
+            current_enroll = item["current_enroll"]
+            waitlist = 0
+        # Create the class instance
+        enrolled_instance = Class_Enroll(
+            id=item["id"],
+            name=item["name"],
+            course_code=item["course_code"],
+            section_number=item["section_number"],
+            current_enroll=current_enroll,
+            max_enroll=item["max_enroll"],
+            department=item["department"],
+            instructor=Instructor(
+                id=item["instructor_id"], name=instructor_data["name"]
+            ),
+            current_waitlist=waitlist,
+            max_waitlist=15,
         )
-        enrolled_list.append(class_info)
+        enrolled_instances.append(enrolled_instance)
 
-    return {"Enrolled": enrolled_list}
+    return {"Enrolled": enrolled_instances}
 
 
 # Get all classes with active waiting lists
 @router.get("/debug/waitlist/classes", tags=["Debug"])
-def view_all_class_waitlists(db: sqlite3.Connection = Depends(get_db)):
-    cursor = db.cursor()
+def view_all_class_waitlists():
 
     # fetch all relevant waitlist information
-    cursor.execute(
-        """
-        SELECT class.id AS class_id, class.name AS class_name, class.course_code,
-                class.section_number, class.max_enroll,
-                department.id AS department_id, department.name AS department_name,
-                users.uid AS instructor_id, users.name AS instructor_name,
-                class.current_enroll - class.max_enroll AS waitlist_total
-            FROM class
-            JOIN department ON class.department_id = department.id
-            JOIN instructor_class ON class.id = instructor_class.class_id
-            JOIN users ON instructor_class.instructor_id = users.uid
-            WHERE class.current_enroll > class.max_enroll
-        """
-    )
-    waitlist_data = cursor.fetchall()
+    waitlist_data = wl.get_all_class_waitlists()
 
     # Check if exist
     if not waitlist_data:
@@ -1134,19 +1097,29 @@ def view_all_class_waitlists(db: sqlite3.Connection = Depends(get_db)):
     # Create a list to store the Waitlist_Info instances
     waitlist_list = []
 
-    # Iterate through the query results and create Waitlist_Info instances
-    for row in waitlist_data:
-        waitlist_info = Waitlist_Info(
-            id=row["class_id"],
-            name=row["class_name"],
-            course_code=row["course_code"],
-            section_number=row["section_number"],
-            max_enroll=row["max_enroll"],
-            department=Department(id=row["department_id"], name=row["department_name"]),
-            instructor=Instructor(id=row["instructor_id"], name=row["instructor_name"]),
-            waitlist_total=row["waitlist_total"],
+    # Iterate through the waitlist results and create Waitlist_Info instances
+    class_ids = waitlist_data.keys()
+    class_ids_list = list(class_ids)
+    for cid in class_ids_list:
+        temp = []
+        class_waitlist = wl.get_class_waitlist(cid)
+        student_ids = class_waitlist.keys()
+        student_ids_list = list(student_ids)
+        for sid in student_ids_list:
+            student_data = enrollment.get_user_item(int(sid))
+            wl_inst = Waitlist_Instructor(
+                student=Student(
+                    id=student_data["id"],
+                    name=student_data["name"]
+                ),
+                waitlist_position=class_waitlist[sid]
+            )
+            temp.append(wl_inst)
+        class_instance = Waitlist_Info(
+            class_id=int(cid),
+            students=temp
         )
-        waitlist_list.append(waitlist_info)
+        waitlist_list.append(class_instance)
 
     return {"Waitlists": waitlist_list}
 
@@ -1154,115 +1127,53 @@ def view_all_class_waitlists(db: sqlite3.Connection = Depends(get_db)):
 # Search for specific users based on optional parameters,
 # if no parameters are given, returns all users
 @router.get("/debug/search", tags=["Debug"])
-def search_for_users(
-    uid: typing.Optional[str] = None,
-    name: typing.Optional[str] = None,
-    role: typing.Optional[str] = None,
-    db: sqlite3.Connection = Depends(get_db),
-):
+def search_for_users(id: Optional[int] = None, name: Optional[str] = None, role: Optional[str] = None):
+    
+    table = get_table_resource(dynamodb, USER_TABLE)
 
-    users_info = []
+    # Construct the query based on the provided parameters
+    key_condition_expression = None
+    filter_expression = None
+    
+    if id is not None:
+        query = Key('id').eq(id)
+    elif name is not None:
+        query = Attr('name').eq(name)
+    elif role is not None:
+        query = Attr('roles').contains(role)
 
-    sql = """SELECT * FROM users
-             LEFT JOIN user_role ON users.uid = user_role.user_id
-             LEFT JOIN role ON user_role.role_id = role.rid"""
+    if id is not None:
+        key_condition_expression = Key('id').eq(id)
+    elif name is not None:
+        filter_expression = Attr('name').eq(name)
+    elif role is not None:
+        filter_expression = Attr('roles').contains(role)
 
-    conditions = []
-    values = []
-    arguments = locals()
-
-    for param in SEARCH_PARAMS:
-        if arguments[param.name]:
-            if param.operator == "=":
-                conditions.append(f"{param.name} = ?")
-                values.append(arguments[param.name])
-            else:
-                conditions.append(f"{param.name} LIKE ?")
-                values.append(f"%{arguments[param.name]}%")
-
-    if conditions:
-        sql += " WHERE "
-        sql += " AND ".join(conditions)
-
-    cursor = db.cursor()
-
-    cursor.execute(sql, values)
-    search_data = cursor.fetchall()
-
-    if not search_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No users found that match search parameters",
+    # Perform the query
+    if key_condition_expression is not None:
+        response = table.query(
+            IndexName='id-index',
+            KeyConditionExpression=key_condition_expression
         )
-
-    previous_uid = None
-    for user in search_data:
-        cursor.execute(
-            """
-            SELECT role FROM users 
-            JOIN role ON user_role.role_id = role.rid
-            JOIN user_role ON users.uid = user_role.user_id
-            WHERE uid = ?
-            """,
-            (user["uid"],),
+    elif filter_expression is not None:
+        response = table.scan(
+            IndexName='id-index',
+            FilterExpression=filter_expression
         )
-        roles_data = cursor.fetchall()
-        roles = [role["role"] for role in roles_data]
+    else:
+        # If no parameters provided, return all users
+        response = table.scan(IndexName='id-index')
 
-        if previous_uid != user["uid"]:
-            user_information = User_info(
-                uid=user["uid"],
-                name=user["name"],
-                password=user["password"],
-                roles=roles,
-            )
-            users_info.append(user_information)
-        previous_uid = user["uid"]
-
-    return {"users": users_info}
+    user_data = response.get('Items', [])
+    return {"Users": user_data}
 
 
 # List all classes
 @router.get("/debug/classes", tags=["Debug"])
-def list_all_classes(request: Request, db: sqlite3.Connection = Depends(get_db)):
+def list_all_classes():
 
-    print(request.headers)
+    table = get_table_resource(dynamodb, CLASS_TABLE)
+    response = table.scan(IndexName='id-index')
 
-    cursor = db.cursor()
-    cursor.execute(
-        """
-            SELECT class.id AS class_id, class.name AS class_name, class.course_code,
-                class.section_number, class.current_enroll, class.max_enroll,
-                department.id AS department_id, department.name AS department_name,
-                users.uid AS instructor_id, users.name AS instructor_name
-            FROM class
-            JOIN department ON class.department_id = department.id
-            JOIN instructor_class ON class.id = instructor_class.class_id
-            JOIN users ON instructor_class.instructor_id = users.uid
-        """
-    )
-    class_data = cursor.fetchall()
-
-    if not class_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No classes found"
-        )
-
-    # Create a list to store the Class_Info instances
-    class_info_list = []
-
-    # Iterate through the query results and create Class_Info instances
-    for row in class_data:
-        class_info = Class_Info(
-            id=row["class_id"],
-            name=row["class_name"],
-            course_code=row["course_code"],
-            section_number=row["section_number"],
-            current_enroll=row["current_enroll"],
-            max_enroll=row["max_enroll"],
-            department=Department(id=row["department_id"], name=row["department_name"]),
-            instructor=Instructor(id=row["instructor_id"], name=row["instructor_name"]),
-        )
-        class_info_list.append(class_info)
-
-    return {"Classes": class_info_list}
+    class_data = response.get('Items', [])
+    return {"Users": class_data}
