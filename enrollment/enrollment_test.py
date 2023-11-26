@@ -9,7 +9,7 @@ from enrollment_redis import Waitlist
 from pprint import pprint
 
 # turn debug print statements on or off
-DEBUG = True
+DEBUG = False
 
 # Configure the logger
 logging.basicConfig(level=logging.INFO)
@@ -312,12 +312,9 @@ def create_database(enrollment, wrapper, waitlist):
     waitlist.add_waitlists(8, 1)
     waitlist.add_waitlists(13, 1)
 
-    print("class 1: ", waitlist.get_class_waitlist(1))
-    print("class 14: ", waitlist.get_class_waitlist(14))
-    print("Student 1: ", waitlist.get_student_waitlist(1))
-    print("Student 2: ", waitlist.get_student_waitlist(2))
-    print("Student 1 count: ", waitlist.get_waitlist_count(1))
-    print("class waitlists: ", waitlist.get_all_class_waitlists())
+    student_data = waitlist.get_student_waitlist(1)
+    student_class_id = student_data.keys()
+    print(student_class_id)
 
     if DEBUG:
         debug_class = []

@@ -321,7 +321,7 @@ def drop_student_from_class(student_id: int, class_id: int, request: Request):
                     status_code=403, detail="Access forbidden, wrong user"
                 )
 
-    # fetch data for the suer
+    # fetch data for the user
     student_data = enrollment.get_user_item(student_id)
 
     # fetch data for the class
@@ -456,25 +456,18 @@ def remove_from_waitlist(student_id: int, class_id: int, request: Request):
     # check if student exists
     if not student_data:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Student not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="Student not on a waitlist"
         )
 
     # get class information
     student_class_id = student_data.keys()
-
-    # check if class exists
-    if class_id not in student_class_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Class not found"
-        )
+    cid = str(class_id)
 
     # check if the student is in the waitlist
-    student_wait = wl.is_student_on_waitlist(student_id, class_id)
-
-    if student_wait is None:
+    if cid not in student_class_id:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Student is not on the waiting list for this class",
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Student is not on the waiting list for this class"
         )
 
     # Delete student from waitlist enrollment
@@ -497,7 +490,7 @@ def view_current_waitlist(instructor_id: int, class_id: int, request: Request):
         current_roles = roles_string.split(",")
 
         r_flag = True
-        # Check if the current user's role matches 'registrar'
+        # Check if the current user's role match2es 'registrar'
         for role in current_roles:
             if role == "registrar":
                 r_flag = False
