@@ -675,7 +675,7 @@ def get_instructor_dropped(instructor_id: int, class_id: int, request: Request):
             }
             for student_id in dropped_data
         ]
-        return {"Enrolled": dropped_list}
+        return {"Dropped": dropped_list}
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
